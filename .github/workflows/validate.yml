@@ -1,0 +1,27 @@
+name: Validate plugin source
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          fetch-depth: 0
+      - name: Validate index and immutable releases
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [ -n "$BASE_SHA" ] && git cat-file -e "$BASE_SHA:index.json" 2>/dev/null; then
+            git show "$BASE_SHA:index.json" > .base-index.json
+            node scripts/validate-index.mjs --base .base-index.json
+          else
+            node scripts/validate-index.mjs
+          fi
+      - name: Test index validation
+        run: node --test scripts/validate-index.test.mjs
