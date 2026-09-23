@@ -16,9 +16,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/controller"
 	"github.com/QuantumNous/new-api/i18n"
-	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	"github.com/QuantumNous/new-api/service"
@@ -66,7 +64,7 @@ func TestCloudflareJevNativeIntegration(t *testing.T) {
 	sqlDB, err := db.DB()
 	require.NoError(t, err)
 	sqlDB.SetMaxOpenConns(1)
-	require.NoError(t, db.AutoMigrate(&model.Option{}, &model.TaskPlugin{}, &model.Channel{}, &model.Token{}, &model.Log{}, &model.Group{}, &model.GroupAlias{}, &model.ChannelGroupBinding{}, &model.Ability{}, &model.UserSubscription{}, &model.SubscriptionPreConsumeRecord{}, &model.PromptAuditConfig{}, &model.RequestArchiveConfig{}, &model.PromptAuditQueueState{}, &model.RequestArchiveQueueState{}))
+	require.NoError(t, db.AutoMigrate(&model.Option{}, &model.TaskPlugin{}, &model.Channel{}, &model.Token{}, &model.Log{}, &model.Group{}, &model.GroupAlias{}, &model.ChannelGroupBinding{}, &model.Ability{}, &model.UserSubscription{}, &model.SubscriptionPreConsumeRecord{}, &model.PromptAuditConfig{}, &model.PromptAuditEndpoint{}, &model.RequestArchiveConfig{}, &model.RequestArchiveTarget{}, &model.PromptAuditQueueState{}, &model.RequestArchiveQueueState{}))
 	oldRegistry, oldLogDB := jsplugin.DefaultRegistry, model.LOG_DB
 	oldCache, oldBatch, oldLog := common.MemoryCacheEnabled, common.BatchUpdateEnabled, common.LogConsumeEnabled
 	oldQuotaPerUnit := common.QuotaPerUnit
@@ -171,8 +169,7 @@ func TestCloudflareJevNativeIntegration(t *testing.T) {
 		require.NoError(t, db.Create(&model.Ability{ChannelId: channel.Id, Group: group.Code, GroupId: group.Id, Model: "typesafe/jev", Enabled: true, Priority: channel.Priority}).Error)
 	}
 	engine := gin.New()
-	engine.GET("/v1/task/plugins/:plugin_key/:task_id", middleware.TokenAuth(), controller.GetOfficialPluginTask)
-	engine.GET("/v1/task/plugins/:plugin_key/:task_id/artifacts", middleware.TokenAuth(), controller.GetOfficialPluginArtifacts)
+	SetRelayRouter(engine)
 	engine.NoRoute(SetPluginRouter(engine), func(c *gin.Context) { c.Status(http.StatusNotFound) })
 	require.NoError(t, service.RefreshTaskPluginRoutes())
 	send := func(method, path, key string) *httptest.ResponseRecorder {
@@ -185,11 +182,32 @@ func TestCloudflareJevNativeIntegration(t *testing.T) {
 		engine.ServeHTTP(recorder, request)
 		return recorder
 	}
-	const route = "/cloudflare/jev/v1/systemone"
+	const route = "/v1/systemone"
 	t.Run("匿名请求不调用上游", func(t *testing.T) {
 		response := send(http.MethodPost, route, "")
 		assert.Equal(t, http.StatusUnauthorized, response.Code, response.Body.String())
 		assert.EqualValues(t, 0, calls.Load())
+	})
+	t.Run("只注册统一POST入口且不接管聊天", func(t *testing.T) {
+		beforeCalls := calls.Load()
+		response := send(http.MethodPost, "/cloudflare/jev/v1/systemone", token.Key)
+		assert.Equal(t, http.StatusNotFound, response.Code, response.Body.String())
+		response = send(http.MethodGet, route, token.Key)
+		assert.Equal(t, http.StatusMethodNotAllowed, response.Code, response.Body.String())
+		response = send(http.MethodPost, "/v1/chat/completions", "")
+		assert.Equal(t, http.StatusUnauthorized, response.Code, response.Body.String())
+		assert.NotContains(t, response.Body.String(), "detail", "静态聊天入口不能使用插件错误格式")
+		assert.Equal(t, beforeCalls, calls.Load())
+	})
+	t.Run("错误模型在发送上游前拒绝", func(t *testing.T) {
+		beforeCalls := calls.Load()
+		request := httptest.NewRequest(http.MethodPost, route, strings.NewReader(strings.Replace(requestBody, "typesafe/jev", "jev-1.13.0", 1)))
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Authorization", "Bearer "+token.Key)
+		response := httptest.NewRecorder()
+		engine.ServeHTTP(response, request)
+		assert.Equal(t, http.StatusBadRequest, response.Code, response.Body.String())
+		assert.Equal(t, beforeCalls, calls.Load())
 	})
 	for _, tc := range []struct{ name, body, channelURL string }{
 		{"直接结果", answer, baseURL},
@@ -249,6 +267,24 @@ func TestCloudflareJevNativeIntegration(t *testing.T) {
 			assert.EqualValues(t, 2, count, "失败不能创建成功任务")
 		})
 	}
+	t.Run("切回旧版本与重新激活只保留当前入口", func(t *testing.T) {
+		beforeCalls := calls.Load()
+		previousSource, readErr := os.ReadFile(os.Getenv("CLOUDFLARE_JEV_PREVIOUS_SOURCE"))
+		require.NoError(t, readErr)
+		previous, compileErr := jsplugin.CompilePlugin(string(previousSource), jsplugin.Options{})
+		require.NoError(t, compileErr)
+		archived := model.TaskPlugin{Key: previous.Meta.Key, Version: previous.Meta.Version, APIVersion: previous.Meta.APIVersion, Source: string(previousSource), SourceHash: fmt.Sprintf("%x", sha256.Sum256(previousSource)), SourceKind: "custom"}
+		require.NoError(t, db.Create(&archived).Error)
+		require.NoError(t, model.ActivateTaskPlugin(archived.Key, archived.Version))
+		require.NoError(t, service.RefreshTaskPluginRoutes())
+		assert.Equal(t, http.StatusNotFound, send(http.MethodPost, route, "").Code)
+		assert.Equal(t, http.StatusUnauthorized, send(http.MethodPost, "/cloudflare/jev/v1/systemone", "").Code)
+		require.NoError(t, model.ActivateTaskPlugin(plugin.Key, plugin.Version))
+		require.NoError(t, service.RefreshTaskPluginRoutes())
+		assert.Equal(t, http.StatusUnauthorized, send(http.MethodPost, route, "").Code)
+		assert.Equal(t, http.StatusNotFound, send(http.MethodPost, "/cloudflare/jev/v1/systemone", "").Code)
+		assert.Equal(t, beforeCalls, calls.Load())
+	})
 	t.Run("禁用后撤销原生入口", func(t *testing.T) {
 		beforeCalls := calls.Load()
 		require.NoError(t, model.SetTaskPluginEnabled(plugin.Key, false))
