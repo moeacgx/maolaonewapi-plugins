@@ -4,9 +4,45 @@ import { readFile } from "node:fs/promises";
 import { fixture } from "./cloudflare-jev-cases.mjs";
 
 const bytes = await readFile(
-  new URL("../published/cloudflare-jev/0.1.0/plugin.js", import.meta.url),
+  new URL("../published/cloudflare-jev/0.2.0/plugin.js", import.meta.url),
 );
-const plugin = await import("data:text/javascript;base64," + bytes.toString("base64"));
+const plugin = await import(
+  "data:text/javascript;base64," + bytes.toString("base64")
+);
+test("客户端统一入口仍由插件转换为 Cloudflare 私有请求", () => {
+  assert.equal(plugin.meta.routes.length, 1);
+  const route = plugin.meta.routes[0];
+  assert.equal(route.method, "POST");
+  assert.equal(route.path, "/v1/systemone");
+  const intent = plugin.native[route.decode]({
+    body: {
+      kind: "json",
+      value: {
+        model: "typesafe/jev",
+        state: null,
+        questions: { ok: { type: "noul", instructions: null } },
+      },
+    },
+  });
+  const upstream = plugin.buildSubmitRequest({
+    model: intent.model,
+    requestBody: intent.requestBody,
+    baseUrl:
+      "https://api.cloudflare.com/client/v4/accounts/0123456789abcdef0123456789abcdef",
+    apiKey: "test-only",
+  });
+  assert.equal(
+    upstream.url,
+    "https://api.cloudflare.com/client/v4/accounts/0123456789abcdef0123456789abcdef/ai/run",
+  );
+  assert.deepEqual(upstream.body, {
+    model: "typesafe/jev",
+    input: {
+      state: null,
+      questions: { ok: { type: "noul", instructions: null } },
+    },
+  });
+});
 for (const entry of fixture.cases) {
   test(entry.name, () => {
     const invoke = () =>

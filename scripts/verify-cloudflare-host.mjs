@@ -7,7 +7,9 @@ import { spawnSync } from "node:child_process";
 import { fixture } from "../tests/cloudflare-jev-cases.mjs";
 
 if (process.argv.length !== 3)
-  throw new Error("用法：node scripts/verify-cloudflare-host.mjs <NewAPI宿主源码目录>");
+  throw new Error(
+    "用法：node scripts/verify-cloudflare-host.mjs <NewAPI宿主源码目录>",
+  );
 const host = path.resolve(process.argv[2]);
 if (
   !(await readFile(path.join(host, "go.mod"), "utf8")).startsWith(
@@ -25,12 +27,8 @@ try {
     overlayPath,
     JSON.stringify({
       Replace: {
-        [path.join(host, "router", "cloudflare_jev_external_test.go")]: path.join(
-          root,
-          "tests",
-          "host",
-          "cloudflare_jev_test.go",
-        ),
+        [path.join(host, "router", "cloudflare_jev_external_test.go")]:
+          path.join(root, "tests", "host", "cloudflare_jev_test.go"),
       },
     }),
   );
@@ -51,6 +49,13 @@ try {
       env: {
         ...process.env,
         CLOUDFLARE_JEV_PLUGIN_SOURCE: path.join(
+          root,
+          "published",
+          "cloudflare-jev",
+          "0.2.0",
+          "plugin.js",
+        ),
+        CLOUDFLARE_JEV_PREVIOUS_SOURCE: path.join(
           root,
           "published",
           "cloudflare-jev",
