@@ -1,5 +1,29 @@
 {
   "indexVersion": 1,
   "name": "MaoLao Maintained",
-  "plugins": []
+  "plugins": [
+    {
+      "key": "typesafe",
+      "name": "TypeSafe",
+      "description": {
+        "en": "Typed decisions with TypeSafe Jev, input priced per million tokens and output free",
+        "zh": "TypeSafe Jev 结构化判断，输入按每百万 token 定价，输出免费"
+      },
+      "models": [
+        "jev-1.13.0",
+        "jev-latest",
+        "jev-preview"
+      ],
+      "latest": "1.0.0",
+      "versions": [
+        {
+          "version": "1.0.0",
+          "path": "published/typesafe/1.0.0/plugin.js",
+          "sha256": "80585e402c8e6709f976e6be1f0308a95d3b991370383ab984d21fe968d8e912",
+          "kind": "task",
+          "minApiVersion": 1
+        }
+      ]
+    }
+  ]
 }
