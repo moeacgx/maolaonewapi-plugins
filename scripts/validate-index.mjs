@@ -10,15 +10,22 @@ export async function validateIndex(root, baseFile) {
   const bytes = await readFile(path.join(root, 'index.json'))
   if (bytes.length > 2 * 1024 * 1024) throw new Error('索引超过 2 MiB')
   const index = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))
-  if (index.indexVersion !== 1 || !Array.isArray(index.plugins)) throw new Error('索引必须采用 indexVersion 1')
+  if (index.indexVersion !== 1 || !Array.isArray(index.plugins) || (index.retired != null && !Array.isArray(index.retired))) throw new Error('索引必须采用 indexVersion 1')
   const keys = new Set()
   const identities = new Map()
+  const retired = new Map()
+  for (const entry of index.retired ?? []) {
+    const identity = `${entry.key}@${entry.version}`
+    if (!keyPattern.test(entry.key) || typeof entry.version !== 'string' || !versionPattern.test(entry.version) || retired.has(identity) || typeof entry.path !== 'string' || !/^[a-f0-9]{64}$/.test(entry.sha256)) throw new Error('已退役版本记录无效')
+    retired.set(identity, entry)
+  }
   for (const plugin of index.plugins) {
     if (!keyPattern.test(plugin.key) || keys.has(plugin.key) || typeof plugin.name !== 'string' || !plugin.name.trim()) throw new Error('插件标识无效或重复')
     keys.add(plugin.key)
     if (!Array.isArray(plugin.versions) || !plugin.versions.length) throw new Error('插件没有版本')
     for (const version of plugin.versions) {
       const identity = `${plugin.key}@${version.version}`
+      if (retired.has(identity)) throw new Error(`版本同时出现在发布和退役记录：${identity}`)
       if (typeof version.version !== 'string' || version.version.length > 64 || !versionPattern.test(version.version) || identities.has(identity)) throw new Error('版本无效或重复')
       const expected = `published/${plugin.key}/${version.version}/plugin.js`
       if (version.path !== expected || version.kind !== 'task' || version.minApiVersion !== 1 || !/^[a-f0-9]{64}$/.test(version.sha256)) throw new Error('路径、类型、API 版本或 hash 无效')
@@ -42,6 +49,11 @@ export async function validateIndex(root, baseFile) {
     for (const plugin of base.plugins) for (const old of plugin.versions) {
       const identity = `${plugin.key}@${old.version}`
       const current = identities.get(identity)
+      const retiredVersion = retired.get(identity)
+      if (retiredVersion) {
+        if (retiredVersion.path !== old.path || retiredVersion.sha256 !== old.sha256) throw new Error(`已退役版本记录与历史不一致：${identity}`)
+        continue
+      }
       if (!current || current.path !== old.path || current.sha256 !== old.sha256) throw new Error(`已发布版本不可修改或删除：${identity}`)
     }
   }

@@ -21,6 +21,8 @@ test('公开索引保护源码 hash 与历史版本不可变', async () => {
     await assert.rejects(validateIndex(root), /hash 不一致/)
     await writeFile(file, source)
     await writeFile(path.join(root, 'base.json'), JSON.stringify(index))
+    await writeFile(path.join(root, 'index.json'), JSON.stringify({ indexVersion: 1, plugins: [], retired: [{ key: 'demo', version: '1.0.0', path: relative, sha256: index.plugins[0].versions[0].sha256 }] }))
+    assert.equal(await validateIndex(root, path.join(root, 'base.json')), 0)
     await writeFile(path.join(root, 'index.json'), JSON.stringify({ indexVersion: 1, plugins: [] }))
     await assert.rejects(validateIndex(root, path.join(root, 'base.json')), /不可修改或删除/)
     index.plugins[0].versions[0].path = '../secret.js'

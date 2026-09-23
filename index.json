@@ -1,5 +1,13 @@
 {
   "indexVersion": 1,
   "name": "MaoLao Maintained",
-  "plugins": []
+  "plugins": [],
+  "retired": [
+    {
+      "key": "typesafe",
+      "version": "1.0.0",
+      "path": "published/typesafe/1.0.0/plugin.js",
+      "sha256": "80585e402c8e6709f976e6be1f0308a95d3b991370383ab984d21fe968d8e912"
+    }
+  ]
 }
