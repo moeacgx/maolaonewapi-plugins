@@ -21,6 +21,7 @@ import (
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/config"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -51,6 +52,17 @@ func TestCloudflareJevFixture(t *testing.T) {
 }
 
 func TestCloudflareJevNativeIntegration(t *testing.T) {
+	for _, fixedPrice := range []bool{false, true} {
+		name := "用量表达式"
+		if fixedPrice {
+			name = "按次计费"
+		}
+		t.Run(name, func(t *testing.T) { testCloudflareJevNativeIntegration(t, fixedPrice) })
+	}
+}
+
+func testCloudflareJevNativeIntegration(t *testing.T, fixedPrice bool) {
+	t.Helper()
 	sourcePath := os.Getenv("CLOUDFLARE_JEV_PLUGIN_SOURCE")
 	require.NotEmpty(t, sourcePath, "必须指定待验证插件源码")
 	source, err := os.ReadFile(sourcePath)
@@ -90,6 +102,14 @@ func TestCloudflareJevNativeIntegration(t *testing.T) {
 		"billing_setting.billing_mode": `{"typesafe/jev":"tiered_expr"}`,
 		"billing_setting.billing_expr": `{"typesafe/jev":"u(\"input_tokens\") * 0.042 / 1000000"}`,
 	}))
+	reservedQuota := int64(672)
+	if fixedPrice {
+		savedPrice := ratio_setting.ModelPrice2JSONString()
+		t.Cleanup(func() { require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(savedPrice)) })
+		require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"typesafe/jev":0.01}`))
+		require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{"billing_setting.billing_mode": `{}`}))
+		reservedQuota = 5000
+	}
 	plugin := model.TaskPlugin{Key: loaded.Meta.Key, Version: loaded.Meta.Version, APIVersion: loaded.Meta.APIVersion, Source: string(source), SourceHash: fmt.Sprintf("%x", sha256.Sum256(source)), SourceKind: "custom", Active: true, Enabled: true}
 	require.NoError(t, db.Create(&plugin).Error)
 	require.NoError(t, db.Create(&model.Option{Key: "TaskPluginEnabled", Value: "true"}).Error)
@@ -104,10 +124,24 @@ func TestCloudflareJevNativeIntegration(t *testing.T) {
 	const baseURL = "https://api.cloudflare.com" + accountPath
 	const requestBody = `{"model":"typesafe/jev","state":null,"questions":{"urgent":{"type":"noul","instructions":null},"department":{"type":"choice","instructions":"应由哪个部门处理？","criteria":{"billing":null,"technical":"技术故障"}},"severity":{"type":"score","instructions":"严重程度","criteria":["低","高"]}}}`
 	const answer = `{"model":"jev-1.13.0","answers":{"urgent":{"type":"noul","noul":0},"department":{"type":"choice","choice":"billing","confidence":1,"probabilities":{"billing":1,"technical":0}},"severity":{"type":"score","score":0.25,"confidence":0.5,"legend":{"0":"低","1":"高"},"probabilities":{"0":0.75,"1":0.25}}},"usage":{"input_tokens":1000,"output_tokens":73}}`
+	const completedRequest = `{"model":"typesafe/jev","state":"重复扣款，请退款。","questions":{"urgent":{"type":"noul","instructions":"是否优先处理？"},"department":{"type":"choice","instructions":"选择部门","criteria":{"billing":"账单","technical":"技术","sales":"售前"}},"frustration":{"type":"score","instructions":"不满程度","criteria":["平静","不满","非常生气"]}}}`
+	completedBytes, err := os.ReadFile(os.Getenv("CLOUDFLARE_JEV_COMPLETED_RESPONSE"))
+	require.NoError(t, err)
+	var completedEnvelope map[string]any
+	require.NoError(t, common.Unmarshal(completedBytes, &completedEnvelope))
+	completedState, ok := completedEnvelope["result"].(map[string]any)
+	require.True(t, ok)
+	completedAnswer, err := common.Marshal(completedState["result"])
+	require.NoError(t, err)
+	completedDirect, err := common.Marshal(completedState)
+	require.NoError(t, err)
 	var outgoingBody map[string]any
 	require.NoError(t, common.Unmarshal([]byte(requestBody), &outgoingBody))
 	expectedUpstream, err := common.Marshal(map[string]any{"model": "typesafe/jev", "input": map[string]any{"state": outgoingBody["state"], "questions": outgoingBody["questions"]}})
 	require.NoError(t, err)
+	var expectedRequest atomic.Value
+	expectedRequest.Store(string(expectedUpstream))
+	currentRequest := requestBody
 	var calls atomic.Int32
 	var responseBody atomic.Value
 	responseBody.Store(answer)
@@ -123,13 +157,13 @@ func TestCloudflareJevNativeIntegration(t *testing.T) {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		assert.JSONEq(t, string(expectedUpstream), string(body))
-		// 请求到达上游时已按 32000 输入 token 预扣 672 quota。
+		assert.JSONEq(t, expectedRequest.Load().(string), string(body))
+		// 用量模式预扣 32000 token，按次模式使用固定价格；均在上游调用前完成。
 		var chargedUser model.User
 		var chargedToken model.Token
 		if assert.NoError(t, db.First(&chargedUser, user.Id).Error) && assert.NoError(t, db.First(&chargedToken, token.Id).Error) {
-			assert.EqualValues(t, balanceBeforeRequest.Load()-672, chargedUser.Quota)
-			assert.EqualValues(t, balanceBeforeRequest.Load()-672, chargedToken.RemainQuota)
+			assert.EqualValues(t, balanceBeforeRequest.Load()-reservedQuota, chargedUser.Quota)
+			assert.EqualValues(t, balanceBeforeRequest.Load()-reservedQuota, chargedToken.RemainQuota)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, responseBody.Load().(string))
@@ -173,7 +207,7 @@ func TestCloudflareJevNativeIntegration(t *testing.T) {
 	engine.NoRoute(SetPluginRouter(engine), func(c *gin.Context) { c.Status(http.StatusNotFound) })
 	require.NoError(t, service.RefreshTaskPluginRoutes())
 	send := func(method, path, key string) *httptest.ResponseRecorder {
-		request := httptest.NewRequest(method, path, strings.NewReader(requestBody))
+		request := httptest.NewRequest(method, path, strings.NewReader(currentRequest))
 		request.Header.Set("Content-Type", "application/json")
 		if key != "" {
 			request.Header.Set("Authorization", "Bearer "+key)
@@ -209,27 +243,48 @@ func TestCloudflareJevNativeIntegration(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, response.Code, response.Body.String())
 		assert.Equal(t, beforeCalls, calls.Load())
 	})
-	for _, tc := range []struct{ name, body, channelURL string }{
-		{"直接结果", answer, baseURL},
-		{"成功包裹及完整运行地址", `{"success":true,"result":` + answer + `,"errors":[],"messages":[]}`, baseURL + "/ai/run"},
+	var successfulTasks int64
+	var totalCharged int
+	for _, tc := range []struct {
+		name, body, channelURL, request, expected string
+		quota                                     int
+	}{
+		{"直接结果", answer, baseURL, requestBody, answer, 21},
+		{"成功包裹及完整运行地址", `{"success":true,"result":` + answer + `,"errors":[],"messages":[]}`, baseURL + "/ai/run", requestBody, answer, 21},
+		{"现场Completed双层包裹", string(completedBytes), baseURL, completedRequest, string(completedAnswer), 10},
+		{"直接Completed包裹", string(completedDirect), baseURL, completedRequest, string(completedAnswer), 10},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			currentRequest = tc.request
+			var input map[string]any
+			require.NoError(t, common.Unmarshal([]byte(tc.request), &input))
+			upstream, marshalErr := common.Marshal(map[string]any{"model": "typesafe/jev", "input": map[string]any{"state": input["state"], "questions": input["questions"]}})
+			require.NoError(t, marshalErr)
+			expectedRequest.Store(string(upstream))
+			charge := tc.quota
+			if fixedPrice {
+				charge = 5000
+			}
 			responseBody.Store(tc.body)
 			require.NoError(t, db.Model(&model.Channel{}).Where("id = ?", 94401).Update("base_url", tc.channelURL).Error)
 			response := send(http.MethodPost, route, token.Key)
 			require.Equal(t, http.StatusOK, response.Code, response.Body.String())
-			assert.JSONEq(t, answer, response.Body.String())
-			expectedBalance := balanceBeforeRequest.Add(-21)
+			assert.JSONEq(t, tc.expected, response.Body.String())
+			assert.NotContains(t, response.Body.String(), "gatewayMetadata")
+			expectedBalance := balanceBeforeRequest.Add(-int64(charge))
+			totalCharged += charge
+			successfulTasks++
 			var actualUser model.User
 			var actualToken model.Token
 			require.NoError(t, db.First(&actualUser, user.Id).Error)
 			require.NoError(t, db.First(&actualToken, token.Id).Error)
 			assert.EqualValues(t, expectedBalance, actualUser.Quota)
 			assert.EqualValues(t, expectedBalance, actualToken.RemainQuota)
+			assert.Equal(t, totalCharged, actualToken.UsedQuota)
 			var task model.Task
 			require.NoError(t, db.Order("id DESC").First(&task).Error)
 			assert.Equal(t, 94401, task.ChannelId)
-			assert.Equal(t, 21, task.Quota)
+			assert.Equal(t, charge, task.Quota)
 			assert.EqualValues(t, model.TaskStatusSuccess, task.Status)
 			assert.True(t, task.PrivateData.ResultDiscarded)
 			assert.Empty(t, task.PrivateData.PluginData)
@@ -242,11 +297,15 @@ func TestCloudflareJevNativeIntegration(t *testing.T) {
 			}
 		})
 	}
+	currentRequest = requestBody
+	expectedRequest.Store(string(expectedUpstream))
 	for _, tc := range []struct{ name, body string }{
 		{"HTTP200失败包裹", `{"success":false,"result":` + answer + `,"errors":[{"message":"PRIVATE_CLOUDFLARE_ERROR"}]}`},
 		{"缺失输入用量", strings.Replace(answer, `"input_tokens":1000,`, "", 1)},
 		{"负输入用量", strings.Replace(answer, `"input_tokens":1000`, `"input_tokens":-1`, 1)},
 		{"超出输入预算", strings.Replace(answer, `"input_tokens":1000`, `"input_tokens":32001`, 1)},
+		{"Completed缺失用量", `{"success":true,"result":{"state":"Completed","result":` + strings.Replace(answer, `"input_tokens":1000,`, "", 1) + `}}`},
+		{"未完成不能接受答案", `{"success":true,"result":{"state":"Running","result":` + answer + `}}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			responseBody.Store(tc.body)
@@ -260,11 +319,11 @@ func TestCloudflareJevNativeIntegration(t *testing.T) {
 			// 等待宿主异步退款提交，使用账务结果判定完成。
 			require.Eventually(t, func() bool {
 				return db.First(&actualUser, user.Id).Error == nil && db.First(&actualToken, token.Id).Error == nil &&
-					actualUser.Quota == balanceBeforeRequest.Load() && int64(actualToken.RemainQuota) == balanceBeforeRequest.Load() && actualToken.UsedQuota == 42
+					actualUser.Quota == balanceBeforeRequest.Load() && int64(actualToken.RemainQuota) == balanceBeforeRequest.Load() && actualToken.UsedQuota == totalCharged
 			}, 2*time.Second, 10*time.Millisecond)
 			var count int64
 			require.NoError(t, db.Model(&model.Task{}).Count(&count).Error)
-			assert.EqualValues(t, 2, count, "失败不能创建成功任务")
+			assert.EqualValues(t, successfulTasks, count, "失败不能创建成功任务")
 		})
 	}
 	t.Run("切回旧版本与重新激活只保留当前入口", func(t *testing.T) {

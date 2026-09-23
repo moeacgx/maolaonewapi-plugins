@@ -1,15 +1,24 @@
 import { pathToFileURL } from "node:url";
+import { readFileSync } from "node:fs";
 
 const account = "0123456789abcdef0123456789abcdef";
 const baseUrl = `https://api.cloudflare.com/client/v4/accounts/${account}`;
 const questions = {
-  urgent: { type: "noul", instructions: null, criteria: { true: "资金损失", false: null } },
+  urgent: {
+    type: "noul",
+    instructions: null,
+    criteria: { true: "资金损失", false: null },
+  },
   team: {
     type: "choice",
     instructions: "选择部门",
     criteria: { billing: null, technical: { label: "技术" } },
   },
-  severity: { type: "score", instructions: ["分级"], criteria: [{ label: "低" }, { label: "高" }] },
+  severity: {
+    type: "score",
+    instructions: ["分级"],
+    criteria: [{ label: "低" }, { label: "高" }],
+  },
 };
 const request = {
   model: "typesafe/jev",
@@ -60,22 +69,237 @@ const success = {
   immediate: { status: "SUCCESS", progress: "100%" },
 };
 const cases = [];
+// 保留现场响应的结构和数值；夹具不包含账户地址、请求 ID 或凭据。
+const completedEnvelope = JSON.parse(
+  readFileSync(
+    new URL("./fixtures/cloudflare-jev-completed.json", import.meta.url),
+    "utf8",
+  ),
+);
+const completedContext = {
+  ...context,
+  requestBody: {
+    model: "typesafe/jev",
+    state: "订单重复扣款，请协助退款。",
+    questions: {
+      urgent: {
+        type: "noul",
+        instructions: "是否优先处理？",
+        criteria: { true: "资金损失", false: "一般咨询" },
+      },
+      department: {
+        type: "choice",
+        instructions: "选择处理部门",
+        criteria: { billing: "账单", technical: "技术", sales: "售前" },
+      },
+      frustration: {
+        type: "score",
+        instructions: "判断不满程度",
+        criteria: ["平静", "不满", "非常生气"],
+      },
+    },
+  },
+};
 function good(name, hook, args, expected, member) {
   cases.push({ name, hook, ...(member ? { member } : {}), args, expected });
 }
 function bad(name, hook, args, expectedError, member) {
-  cases.push({ name, hook, ...(member ? { member } : {}), args, expectedError });
+  cases.push({
+    name,
+    hook,
+    ...(member ? { member } : {}),
+    args,
+    expectedError,
+  });
 }
 function requestError(name, change, message) {
   const body = structuredClone(request);
   change(body);
-  bad(name, "native", [{ body: { kind: "json", value: body } }], message, "decodeSystemOne");
+  bad(
+    name,
+    "native",
+    [{ body: { kind: "json", value: body } }],
+    message,
+    "decodeSystemOne",
+  );
 }
 function responseError(name, change, message) {
   const body = structuredClone(response);
   change(body);
-  bad(name, "parseSubmitResponse", [context, { statusCode: 200, body }], message);
+  bad(
+    name,
+    "parseSubmitResponse",
+    [context, { statusCode: 200, body }],
+    message,
+  );
 }
+
+for (const [name, body] of [
+  ["现场Completed双层包裹", completedEnvelope],
+  ["直接Completed状态包裹", completedEnvelope.result],
+]) {
+  good(
+    name,
+    "parseSubmitResponse",
+    [completedContext, { statusCode: 200, body }],
+    {
+      taskId: "task_test",
+      taskData: completedEnvelope.result.result,
+      immediate: { status: "SUCCESS", progress: "100%" },
+    },
+  );
+}
+good(
+  "现场Completed用量按486输入结算",
+  "extractUsageOnComplete",
+  [{}, {}, completedEnvelope.result.result],
+  { input_tokens: 486 },
+);
+good(
+  "Completed包裹保留显式零值",
+  "parseSubmitResponse",
+  [
+    context,
+    {
+      statusCode: 200,
+      body: {
+        success: true,
+        errors: [],
+        result: { state: "Completed", result: response },
+      },
+    },
+  ],
+  success,
+);
+for (const state of [
+  "Queued",
+  "Running",
+  "Failed",
+  "Cancelled",
+  "completed",
+  null,
+]) {
+  bad(
+    "非完成状态不能伪装成功:" + state,
+    "parseSubmitResponse",
+    [context, { statusCode: 200, body: { state, result: response } }],
+    "Cloudflare 任务未完成或结果无效",
+  );
+}
+for (const result of [undefined, null, [], "PRIVATE"]) {
+  bad(
+    "Completed缺少有效结果",
+    "parseSubmitResponse",
+    [context, { statusCode: 200, body: { state: "Completed", result } }],
+    "Cloudflare 任务未完成或结果无效",
+  );
+}
+for (const extra of [
+  { error: "PRIVATE" },
+  { errors: [{ message: "PRIVATE" }] },
+]) {
+  bad(
+    "Completed不能掩盖状态层错误",
+    "parseSubmitResponse",
+    [
+      context,
+      {
+        statusCode: 200,
+        body: {
+          success: true,
+          result: { state: "Completed", result: response, ...extra },
+        },
+      },
+    ],
+    "Cloudflare 任务未完成或结果无效",
+  );
+}
+for (const outer of [
+  { success: false, errors: [] },
+  { success: true, errors: [{ message: "PRIVATE" }] },
+]) {
+  bad(
+    "Completed不能绕过外层失败",
+    "parseSubmitResponse",
+    [
+      context,
+      {
+        statusCode: 200,
+        body: { ...outer, result: { state: "Completed", result: response } },
+      },
+    ],
+    "Cloudflare 返回失败或无效结果",
+  );
+}
+for (const extra of [
+  { success: false },
+  { error: "PRIVATE" },
+  { errors: [{ message: "PRIVATE" }] },
+]) {
+  bad(
+    "Completed不能掩盖模型层错误",
+    "parseSubmitResponse",
+    [
+      context,
+      {
+        statusCode: 200,
+        body: { state: "Completed", result: { ...response, ...extra } },
+      },
+    ],
+    "Cloudflare 返回失败或无效结果",
+  );
+}
+bad(
+  "不递归展开多重Completed",
+  "parseSubmitResponse",
+  [
+    context,
+    {
+      statusCode: 200,
+      body: {
+        state: "Completed",
+        result: { state: "Completed", result: response },
+      },
+    },
+  ],
+  "Cloudflare 任务未完成或结果无效",
+);
+bad(
+  "内层未完成不能借有效答案绕过状态检查",
+  "parseSubmitResponse",
+  [
+    context,
+    {
+      statusCode: 200,
+      body: { state: "Completed", result: { state: "Running", ...response } },
+    },
+  ],
+  "Cloudflare 任务未完成或结果无效",
+);
+bad(
+  "Completed仍要求用量",
+  "parseSubmitResponse",
+  [
+    context,
+    {
+      statusCode: 200,
+      body: { state: "Completed", result: { ...response, usage: null } },
+    },
+  ],
+  "用量缺失",
+);
+bad(
+  "Completed仍要求答案完整",
+  "parseSubmitResponse",
+  [
+    context,
+    {
+      statusCode: 200,
+      body: { state: "Completed", result: { ...response, answers: {} } },
+    },
+  ],
+  "响应缺少匹配",
+);
 
 good("三题型和JSON嵌套零值转换", "buildSubmitRequest", [context], descriptor);
 for (const suffix of ["/", "/ai/run", "/ai/run/"]) {
@@ -90,14 +314,22 @@ good(
   "原生解码剥离非流式标志",
   "native",
   [{ body: { kind: "json", value: { ...request, stream: false } } }],
-  { kind: "submit", model: "typesafe/jev", action: "systemone", requestBody: request },
+  {
+    kind: "submit",
+    model: "typesafe/jev",
+    action: "systemone",
+    requestBody: request,
+  },
   "decodeSystemOne",
 );
 good(
   "空state保留",
   "buildSubmitRequest",
   [{ ...context, requestBody: { ...request, state: null } }],
-  { ...descriptor, body: { model: "typesafe/jev", input: { state: null, questions } } },
+  {
+    ...descriptor,
+    body: { model: "typesafe/jev", input: { state: null, questions } },
+  },
 );
 good(
   "显式分组只留给网关",
@@ -116,7 +348,10 @@ good(
   "parseSubmitResponse",
   [
     context,
-    { statusCode: 200, body: { success: true, result: response, errors: [], messages: [] } },
+    {
+      statusCode: 200,
+      body: { success: true, result: response, errors: [], messages: [] },
+    },
   ],
   success,
 );
@@ -141,21 +376,42 @@ good(
   ],
   success,
 );
-good("同步原生呈现", "native", [{}, { data: response }], response, "renderSystemOne");
+good(
+  "同步原生呈现",
+  "native",
+  [{}, { data: response }],
+  response,
+  "renderSystemOne",
+);
 good("保守预扣预算", "extractUsage", [{ ...context, usagePurpose: "facts" }], {
   input_tokens: 32000,
 });
-good("用量不能误作倍率", "extractUsage", [{ ...context, usagePurpose: "billing_ratios" }], null);
+good(
+  "用量不能误作倍率",
+  "extractUsage",
+  [{ ...context, usagePurpose: "billing_ratios" }],
+  null,
+);
 good("实际输入结算输出不收费", "extractUsageOnComplete", [{}, {}, response], {
   input_tokens: 1000,
 });
 for (const count of [0, 32000]) {
-  const body = { ...response, usage: { input_tokens: count, output_tokens: 0 } };
-  good(`有效输入边界${count}`, "parseSubmitResponse", [context, { statusCode: 200, body }], {
-    ...success,
-    taskData: body,
+  const body = {
+    ...response,
+    usage: { input_tokens: count, output_tokens: 0 },
+  };
+  good(
+    `有效输入边界${count}`,
+    "parseSubmitResponse",
+    [context, { statusCode: 200, body }],
+    {
+      ...success,
+      taskData: body,
+    },
+  );
+  good(`结算输入边界${count}`, "extractUsageOnComplete", [{}, {}, body], {
+    input_tokens: count,
   });
-  good(`结算输入边界${count}`, "extractUsageOnComplete", [{}, {}, body], { input_tokens: count });
 }
 for (const url of [
   "",
@@ -310,7 +566,12 @@ good(
   "不引入Cloudflare未声明的选项档数上限",
   "native",
   [{ body: { kind: "json", value: many } }],
-  { kind: "submit", model: "typesafe/jev", action: "systemone", requestBody: many },
+  {
+    kind: "submit",
+    model: "typesafe/jev",
+    action: "systemone",
+    requestBody: many,
+  },
   "decodeSystemOne",
 );
 for (const statusCode of [401, 429, 500])

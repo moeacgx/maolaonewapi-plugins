@@ -9,12 +9,14 @@
 需要直连 TypeSafe 时，请在任务插件源管理中选择官方源并刷新；宿主必须升级到包含原生同步路由和用量结算能力的版本。
 `retired` 记录仅用于证明曾发布版本的不可变来源和哈希，不会被插件市场展示或安装。
 
-Cloudflare 接入使用本源的 [Cloudflare Jev 0.2.0](published/cloudflare-jev/0.2.0/README.md)，
+Cloudflare 接入使用本源的 [Cloudflare Jev 0.2.1](published/cloudflare-jev/0.2.1/README.md)，
 插件 key 为 `cloudflare-jev`、模型为 `typesafe/jev`；这是独立的 Cloudflare 协议适配，
-不是官方 TypeSafe 插件的重复镜像。已通过模拟上游验收，真实 Cloudflare 账户与付费请求尚未验证。
+不是官方 TypeSafe 插件的重复镜像。已使用脱敏的现场成功响应做离线回放，并通过模拟上游验收；
+本轮未重复发起真实付费请求，修复版线上验收需安装激活后另行确认。
 
 0.2.0 统一客户端入口为 `POST /v1/systemone`，Cloudflare 上游路径只在插件内部处理。
-从 0.1.0 升级需安装并激活 0.2.0；旧版仍保留供回退，不覆盖已发布源码，无需升级 `.335` 宿主。
+0.2.1 补齐 Cloudflare `Completed` 状态包裹解析。升级需安装并激活 0.2.1；
+旧版仍保留供回退，不覆盖已发布源码，无需升级 `.335` 宿主。
 
 ## 使用方式
 
