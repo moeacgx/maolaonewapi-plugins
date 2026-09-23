@@ -5,7 +5,10 @@
 
 **索引地址：** `https://raw.githubusercontent.com/moeacgx/maolaonewapi-plugins/main/index.json`
 
-当前索引为空：尚未发布已完成业务验收的自定义稳定插件。不会把示例或未验收源码标记为稳定版本。
+市场索引收录 [官方 TypeSafe 1.0.0](published/typesafe/1.0.0/README.md)，原样复用 QuantumNous
+插件库的 Jev 支持。需先升级到支持原生同步路由和用量结算的宿主，再从插件市场安装并绑定渠道。
+本版本按用户明确要求纳入索引；已完成模拟上游集成验证，真实供应商和生产验收仍待进行，
+不能将可安装状态理解为已通过生产验收。
 
 ## 使用方式
 
@@ -33,18 +36,22 @@
 {
   "indexVersion": 1,
   "name": "MaoLao Maintained",
-  "plugins": [{
-    "key": "example",
-    "name": "示例",
-    "latest": "1.0.0",
-    "versions": [{
-      "version": "1.0.0",
-      "path": "published/example/1.0.0/plugin.js",
-      "sha256": "填写源码文件真实 SHA-256（64 位十六进制）",
-      "kind": "task",
-      "minApiVersion": 1
-    }]
-  }]
+  "plugins": [
+    {
+      "key": "example",
+      "name": "示例",
+      "latest": "1.0.0",
+      "versions": [
+        {
+          "version": "1.0.0",
+          "path": "published/example/1.0.0/plugin.js",
+          "sha256": "填写源码文件真实 SHA-256（64 位十六进制）",
+          "kind": "task",
+          "minApiVersion": 1
+        }
+      ]
+    }
+  ]
 }
 ```
 
