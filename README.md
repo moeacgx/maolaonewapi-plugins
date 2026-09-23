@@ -6,8 +6,12 @@
 **索引地址：** `https://raw.githubusercontent.com/moeacgx/maolaonewapi-plugins/main/index.json`
 
 当前索引不收录 TypeSafe。TypeSafe Jev 已由官方 `newapi` 插件源提供，避免在本仓库重复展示。
-需要使用 Jev 时，请在任务插件源管理中选择官方源并刷新；宿主必须升级到包含原生同步路由和用量结算能力的版本。
+需要直连 TypeSafe 时，请在任务插件源管理中选择官方源并刷新；宿主必须升级到包含原生同步路由和用量结算能力的版本。
 `retired` 记录仅用于证明曾发布版本的不可变来源和哈希，不会被插件市场展示或安装。
+
+Cloudflare 接入使用本源的 [Cloudflare Jev 0.1.0](published/cloudflare-jev/0.1.0/README.md)，
+插件 key 为 `cloudflare-jev`、模型为 `typesafe/jev`；这是独立的 Cloudflare 协议适配，
+不是官方 TypeSafe 插件的重复镜像。已通过模拟上游验收，真实 Cloudflare 账户与付费请求尚未验证。
 
 ## 使用方式
 
@@ -57,3 +61,15 @@
 每个 key/version 的源码、路径、hash 一经发布即不可修改或删除。修正必须升级版本。
 SHA-256 是完整性校验，不是发布者签名；源码始终需要维护者审查。
 市场不代理远程媒体，不提供 S3、匿名签名或自动升级。
+
+## 插件开发验证
+
+```sh
+node --test --test-timeout=60000 tests/cloudflare-jev.test.mjs
+node scripts/verify-cloudflare-host.mjs /path/to/NewAPI-Mao
+node scripts/validate-index.mjs
+```
+
+宿主验证使用 Go overlay 叠加测试，不修改宿主工作区；fixture 同时由 Node 和宿主 JS 引擎执行。
+CI 固定 `.335` 发布提交验证兼容性，不能用未来宿主的新功能掩盖已部署版本的缺口。
+旧宿主索引生成器会忽略本源的 `retired` 扩展，更新索引时必须保留这些退役记录，禁止覆盖丢失。
