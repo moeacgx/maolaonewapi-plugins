@@ -9,9 +9,16 @@
         "en": "Jev decisions through Cloudflare; configure an account-scoped API URL and token",
         "zh": "通过 Cloudflare 调用 Jev 决策模型，需配置包含账户 ID 的 API 地址和令牌"
       },
-      "models": ["typesafe/jev"],
-      "latest": "0.2.1",
+      "models": ["typesafe/jev", "Typesafe-jev"],
+      "latest": "0.2.2",
       "versions": [
+        {
+          "version": "0.2.2",
+          "path": "published/cloudflare-jev/0.2.2/plugin.js",
+          "sha256": "5194c0bb90fe3cf0b09329bfe074f4a4819a736530642a3a334cf3f722355ed8",
+          "kind": "task",
+          "minApiVersion": 1
+        },
         {
           "version": "0.2.1",
           "path": "published/cloudflare-jev/0.2.1/plugin.js",

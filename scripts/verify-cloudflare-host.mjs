@@ -52,7 +52,7 @@ try {
           root,
           "published",
           "cloudflare-jev",
-          "0.2.1",
+          "0.2.2",
           "plugin.js",
         ),
         CLOUDFLARE_JEV_PREVIOUS_SOURCE: path.join(

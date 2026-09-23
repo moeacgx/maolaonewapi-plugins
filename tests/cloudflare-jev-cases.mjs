@@ -69,6 +69,68 @@ const success = {
   immediate: { status: "SUCCESS", progress: "100%" },
 };
 const cases = [];
+const alias = "Typesafe-jev";
+const aliasContext = {
+  ...context,
+  model: alias,
+  requestBody: { ...request, model: alias },
+};
+good(
+  "别名解码保留客户端模型用于权限与计费",
+  "native",
+  [
+    {
+      body: { kind: "json", value: aliasContext.requestBody },
+    },
+  ],
+  {
+    kind: "submit",
+    model: alias,
+    action: "systemone",
+    requestBody: aliasContext.requestBody,
+  },
+  "decodeSystemOne",
+);
+good(
+  "别名经渠道映射后向Cloudflare发送规范模型",
+  "buildSubmitRequest",
+  [aliasContext],
+  descriptor,
+);
+good("别名预扣使用相同输入预算", "extractUsage", [aliasContext], {
+  input_tokens: 32000,
+});
+good(
+  "别名响应解析保持原答案与真实用量",
+  "parseSubmitResponse",
+  [aliasContext, { statusCode: 200, body: response }],
+  success,
+);
+for (const upstreamModel of [alias, "other-model"]) {
+  bad(
+    "别名拒绝无效上游映射:" + upstreamModel,
+    "buildSubmitRequest",
+    [{ ...aliasContext, upstreamModel }],
+    "上游模型",
+  );
+}
+bad(
+  "别名无渠道映射不能静默改成供应商模型",
+  "buildSubmitRequest",
+  [{ ...aliasContext, upstreamModel: undefined }],
+  "上游模型",
+);
+bad(
+  "仅大小写不同但未声明的别名仍被拒绝",
+  "native",
+  [
+    {
+      body: { kind: "json", value: { ...request, model: "typesafe-jev" } },
+    },
+  ],
+  "模型",
+  "decodeSystemOne",
+);
 // 保留现场响应的结构和数值；夹具不包含账户地址、请求 ID 或凭据。
 const completedEnvelope = JSON.parse(
   readFileSync(

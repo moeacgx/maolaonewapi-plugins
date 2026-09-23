@@ -57,11 +57,13 @@ func TestCloudflareJevNativeIntegration(t *testing.T) {
 		if fixedPrice {
 			name = "按次计费"
 		}
-		t.Run(name, func(t *testing.T) { testCloudflareJevNativeIntegration(t, fixedPrice) })
+		for _, clientModel := range []string{"typesafe/jev", "Typesafe-jev"} {
+			t.Run(name+"/"+clientModel, func(t *testing.T) { testCloudflareJevNativeIntegration(t, fixedPrice, clientModel) })
+		}
 	}
 }
 
-func testCloudflareJevNativeIntegration(t *testing.T, fixedPrice bool) {
+func testCloudflareJevNativeIntegration(t *testing.T, fixedPrice bool, clientModel string) {
 	t.Helper()
 	sourcePath := os.Getenv("CLOUDFLARE_JEV_PLUGIN_SOURCE")
 	require.NotEmpty(t, sourcePath, "必须指定待验证插件源码")
@@ -99,14 +101,14 @@ func testCloudflareJevNativeIntegration(t *testing.T, fixedPrice bool) {
 	}))
 	t.Cleanup(func() { require.NoError(t, config.GlobalConfig.LoadFromDB(savedBilling)) })
 	require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{
-		"billing_setting.billing_mode": `{"typesafe/jev":"tiered_expr"}`,
-		"billing_setting.billing_expr": `{"typesafe/jev":"u(\"input_tokens\") * 0.042 / 1000000"}`,
+		"billing_setting.billing_mode": fmt.Sprintf(`{%q:"tiered_expr"}`, clientModel),
+		"billing_setting.billing_expr": fmt.Sprintf(`{%q:"u(\"input_tokens\") * 0.042 / 1000000"}`, clientModel),
 	}))
 	reservedQuota := int64(672)
 	if fixedPrice {
 		savedPrice := ratio_setting.ModelPrice2JSONString()
 		t.Cleanup(func() { require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(savedPrice)) })
-		require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"typesafe/jev":0.01}`))
+		require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(fmt.Sprintf(`{%q:0.01}`, clientModel)))
 		require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{"billing_setting.billing_mode": `{}`}))
 		reservedQuota = 5000
 	}
@@ -117,14 +119,14 @@ func testCloudflareJevNativeIntegration(t *testing.T, fixedPrice bool) {
 	require.NoError(t, db.Create(&group).Error)
 	user := model.User{Id: 94401, Username: "cloudflare-jev-host-test", Quota: 1000000, Status: common.UserStatusEnabled, Group: group.Code, Setting: `{"billing_preference":"wallet_only"}`}
 	require.NoError(t, db.Create(&user).Error)
-	token := model.Token{Id: 94401, UserId: user.Id, Key: "cloudflarejevtesttoken", Status: common.TokenStatusEnabled, ExpiredTime: -1, RemainQuota: 1000000}
+	token := model.Token{Id: 94401, UserId: user.Id, Key: "cloudflarejevtesttoken", Status: common.TokenStatusEnabled, ExpiredTime: -1, RemainQuota: 1000000, ModelLimitsEnabled: true, ModelLimits: clientModel}
 	require.NoError(t, db.Create(&token).Error)
 
 	const accountPath = "/client/v4/accounts/0123456789abcdef0123456789abcdef"
 	const baseURL = "https://api.cloudflare.com" + accountPath
-	const requestBody = `{"model":"typesafe/jev","state":null,"questions":{"urgent":{"type":"noul","instructions":null},"department":{"type":"choice","instructions":"应由哪个部门处理？","criteria":{"billing":null,"technical":"技术故障"}},"severity":{"type":"score","instructions":"严重程度","criteria":["低","高"]}}}`
+	requestBody := fmt.Sprintf(`{"model":%q,"state":null,"questions":{"urgent":{"type":"noul","instructions":null},"department":{"type":"choice","instructions":"应由哪个部门处理？","criteria":{"billing":null,"technical":"技术故障"}},"severity":{"type":"score","instructions":"严重程度","criteria":["低","高"]}}}`, clientModel)
 	const answer = `{"model":"jev-1.13.0","answers":{"urgent":{"type":"noul","noul":0},"department":{"type":"choice","choice":"billing","confidence":1,"probabilities":{"billing":1,"technical":0}},"severity":{"type":"score","score":0.25,"confidence":0.5,"legend":{"0":"低","1":"高"},"probabilities":{"0":0.75,"1":0.25}}},"usage":{"input_tokens":1000,"output_tokens":73}}`
-	const completedRequest = `{"model":"typesafe/jev","state":"重复扣款，请退款。","questions":{"urgent":{"type":"noul","instructions":"是否优先处理？"},"department":{"type":"choice","instructions":"选择部门","criteria":{"billing":"账单","technical":"技术","sales":"售前"}},"frustration":{"type":"score","instructions":"不满程度","criteria":["平静","不满","非常生气"]}}}`
+	completedRequest := fmt.Sprintf(`{"model":%q,"state":"重复扣款，请退款。","questions":{"urgent":{"type":"noul","instructions":"是否优先处理？"},"department":{"type":"choice","instructions":"选择部门","criteria":{"billing":"账单","technical":"技术","sales":"售前"}},"frustration":{"type":"score","instructions":"不满程度","criteria":["平静","不满","非常生气"]}}}`, clientModel)
 	completedBytes, err := os.ReadFile(os.Getenv("CLOUDFLARE_JEV_COMPLETED_RESPONSE"))
 	require.NoError(t, err)
 	var completedEnvelope map[string]any
@@ -193,14 +195,17 @@ func testCloudflareJevNativeIntegration(t *testing.T, fixedPrice bool) {
 		return localTransport.RoundTrip(forwarded)
 	})
 	// 相同模型的错误插件和 AtlasCloud 故意设置更高优先级，验证按插件身份隔离。
+	mapping := fmt.Sprintf(`{%q:"typesafe/jev"}`, clientModel)
 	for _, channel := range []model.Channel{
 		{Id: 94401, Type: constant.ChannelTypeTaskPlugin, Name: "cloudflare-jev", Priority: common.GetPointer(int64(10)), Key: "cloudflare-provider-secret", BaseURL: common.GetPointer(baseURL), Models: "typesafe/jev", Group: group.Code, Status: common.ChannelStatusEnabled, Setting: common.GetPointer(`{"task_plugin_key":"cloudflare-jev"}`)},
 		{Id: 94402, Type: constant.ChannelTypeTaskPlugin, Name: "typesafe-other", Priority: common.GetPointer(int64(200)), Key: "wrong-plugin-key", BaseURL: common.GetPointer(baseURL), Models: "typesafe/jev", Group: group.Code, Status: common.ChannelStatusEnabled, Setting: common.GetPointer(`{"task_plugin_key":"typesafe"}`)},
 		{Id: 94403, Type: constant.ChannelTypeAtlasCloud, Name: "native-other", Priority: common.GetPointer(int64(300)), Key: "wrong-native-key", BaseURL: common.GetPointer(baseURL), Models: "typesafe/jev", Group: group.Code, Status: common.ChannelStatusEnabled},
 	} {
+		channel.Models = clientModel
+		channel.ModelMapping = &mapping
 		require.NoError(t, db.Create(&channel).Error)
 		require.NoError(t, db.Create(&model.ChannelGroupBinding{ChannelId: channel.Id, GroupId: group.Id}).Error)
-		require.NoError(t, db.Create(&model.Ability{ChannelId: channel.Id, Group: group.Code, GroupId: group.Id, Model: "typesafe/jev", Enabled: true, Priority: channel.Priority}).Error)
+		require.NoError(t, db.Create(&model.Ability{ChannelId: channel.Id, Group: group.Code, GroupId: group.Id, Model: clientModel, Enabled: true, Priority: channel.Priority}).Error)
 	}
 	engine := gin.New()
 	SetRelayRouter(engine)
@@ -235,7 +240,7 @@ func testCloudflareJevNativeIntegration(t *testing.T, fixedPrice bool) {
 	})
 	t.Run("错误模型在发送上游前拒绝", func(t *testing.T) {
 		beforeCalls := calls.Load()
-		request := httptest.NewRequest(http.MethodPost, route, strings.NewReader(strings.Replace(requestBody, "typesafe/jev", "jev-1.13.0", 1)))
+		request := httptest.NewRequest(http.MethodPost, route, strings.NewReader(strings.Replace(requestBody, clientModel, "jev-1.13.0", 1)))
 		request.Header.Set("Content-Type", "application/json")
 		request.Header.Set("Authorization", "Bearer "+token.Key)
 		response := httptest.NewRecorder()
@@ -243,6 +248,32 @@ func testCloudflareJevNativeIntegration(t *testing.T, fixedPrice bool) {
 		assert.Equal(t, http.StatusBadRequest, response.Code, response.Body.String())
 		assert.Equal(t, beforeCalls, calls.Load())
 	})
+	if clientModel == "Typesafe-jev" {
+		t.Run("别名权限不能用规范名权限代替", func(t *testing.T) {
+			beforeCalls := calls.Load()
+			require.NoError(t, db.Model(&model.Token{}).Where("id = ?", token.Id).Update("model_limits", "typesafe/jev").Error)
+			response := send(http.MethodPost, route, token.Key)
+			assert.Equal(t, http.StatusForbidden, response.Code, response.Body.String())
+			assert.Equal(t, beforeCalls, calls.Load())
+			require.NoError(t, db.Model(&model.Token{}).Where("id = ?", token.Id).Update("model_limits", clientModel).Error)
+		})
+		for _, invalidMapping := range []string{`{}`, `{"Typesafe-jev":"unsupported-model"}`} {
+			t.Run("别名缺失或错误映射不调用上游/"+invalidMapping, func(t *testing.T) {
+				beforeCalls := calls.Load()
+				require.NoError(t, db.Model(&model.Channel{}).Where("id = ?", 94401).Update("model_mapping", invalidMapping).Error)
+				response := send(http.MethodPost, route, token.Key)
+				assert.GreaterOrEqual(t, response.Code, http.StatusBadRequest, response.Body.String())
+				assert.Equal(t, beforeCalls, calls.Load())
+				var actualUser model.User
+				var actualToken model.Token
+				require.Eventually(t, func() bool {
+					return db.First(&actualUser, user.Id).Error == nil && db.First(&actualToken, token.Id).Error == nil &&
+						actualUser.Quota == balanceBeforeRequest.Load() && int64(actualToken.RemainQuota) == balanceBeforeRequest.Load()
+				}, 2*time.Second, 10*time.Millisecond)
+				require.NoError(t, db.Model(&model.Channel{}).Where("id = ?", 94401).Update("model_mapping", mapping).Error)
+			})
+		}
+	}
 	var successfulTasks int64
 	var totalCharged int
 	for _, tc := range []struct {
@@ -285,6 +316,8 @@ func testCloudflareJevNativeIntegration(t *testing.T, fixedPrice bool) {
 			require.NoError(t, db.Order("id DESC").First(&task).Error)
 			assert.Equal(t, 94401, task.ChannelId)
 			assert.Equal(t, charge, task.Quota)
+			assert.Equal(t, clientModel, task.Properties.OriginModelName)
+			assert.Equal(t, "typesafe/jev", task.Properties.UpstreamModelName)
 			assert.EqualValues(t, model.TaskStatusSuccess, task.Status)
 			assert.True(t, task.PrivateData.ResultDiscarded)
 			assert.Empty(t, task.PrivateData.PluginData)

@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 import { fixture } from "./cloudflare-jev-cases.mjs";
 
 const bytes = await readFile(
-  new URL("../published/cloudflare-jev/0.2.1/plugin.js", import.meta.url),
+  new URL("../published/cloudflare-jev/0.2.2/plugin.js", import.meta.url),
 );
 const plugin = await import(
   "data:text/javascript;base64," + bytes.toString("base64")
