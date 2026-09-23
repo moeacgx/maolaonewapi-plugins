@@ -1,7 +1,29 @@
 {
   "indexVersion": 1,
   "name": "MaoLao Maintained",
-  "plugins": [],
+  "plugins": [
+    {
+      "key": "cloudflare-jev",
+      "name": "Cloudflare Jev",
+      "description": {
+        "en": "Jev decisions through Cloudflare; configure an account-scoped API URL and token",
+        "zh": "通过 Cloudflare 调用 Jev 决策模型，需配置包含账户 ID 的 API 地址和令牌"
+      },
+      "models": [
+        "typesafe/jev"
+      ],
+      "latest": "0.1.0",
+      "versions": [
+        {
+          "version": "0.1.0",
+          "path": "published/cloudflare-jev/0.1.0/plugin.js",
+          "sha256": "2d52449eee3fb8a49961856c98ce901805c8c4e7053937386692f8723e4443d0",
+          "kind": "task",
+          "minApiVersion": 1
+        }
+      ]
+    }
+  ],
   "retired": [
     {
       "key": "typesafe",
