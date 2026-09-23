@@ -5,10 +5,9 @@
 
 **索引地址：** `https://raw.githubusercontent.com/moeacgx/maolaonewapi-plugins/main/index.json`
 
-市场索引收录 [官方 TypeSafe 1.0.0](published/typesafe/1.0.0/README.md)，原样复用 QuantumNous
-插件库的 Jev 支持。需先升级到支持原生同步路由和用量结算的宿主，再从插件市场安装并绑定渠道。
-本版本按用户明确要求纳入索引；已完成模拟上游集成验证，真实供应商和生产验收仍待进行，
-不能将可安装状态理解为已通过生产验收。
+当前索引不收录 TypeSafe。TypeSafe Jev 已由官方 `newapi` 插件源提供，避免在本仓库重复展示。
+需要使用 Jev 时，请在任务插件源管理中选择官方源并刷新；宿主必须升级到包含原生同步路由和用量结算能力的版本。
+`retired` 记录仅用于证明曾发布版本的不可变来源和哈希，不会被插件市场展示或安装。
 
 ## 使用方式
 
