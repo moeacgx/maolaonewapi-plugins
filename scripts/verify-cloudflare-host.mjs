@@ -52,7 +52,7 @@ try {
           root,
           "published",
           "cloudflare-jev",
-          "0.2.0",
+          "0.2.1",
           "plugin.js",
         ),
         CLOUDFLARE_JEV_PREVIOUS_SOURCE: path.join(
@@ -63,6 +63,12 @@ try {
           "plugin.js",
         ),
         CLOUDFLARE_JEV_PLUGIN_FIXTURE: casesPath,
+        CLOUDFLARE_JEV_COMPLETED_RESPONSE: path.join(
+          root,
+          "tests",
+          "fixtures",
+          "cloudflare-jev-completed.json",
+        ),
       },
       stdio: "inherit",
       // 冷缓存编译允许十分钟；Go 测试本身由 -timeout=60s 限制。

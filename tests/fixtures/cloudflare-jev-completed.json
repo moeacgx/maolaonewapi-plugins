@@ -1,0 +1,29 @@
+{
+  "result": {
+    "state": "Completed",
+    "result": {
+      "model": "jev-1.13.0",
+      "answers": {
+        "urgent": { "type": "noul", "noul": 0.93 },
+        "department": {
+          "type": "choice",
+          "choice": "billing",
+          "probabilities": { "technical": 0, "sales": 0, "billing": 1 },
+          "confidence": 1
+        },
+        "frustration": {
+          "type": "score",
+          "score": 1.2,
+          "legend": { "0": "平静", "1": "不满", "2": "非常生气" },
+          "probabilities": { "0": 0, "1": 0.8, "2": 0.2 },
+          "confidence": 0.7
+        }
+      },
+      "usage": { "input_tokens": 486, "output_tokens": 70 }
+    },
+    "gatewayMetadata": { "keySource": "Unified" }
+  },
+  "success": true,
+  "errors": [],
+  "messages": []
+}
