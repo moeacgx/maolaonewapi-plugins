@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -19,8 +20,10 @@ import (
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
+	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/config"
+	"github.com/QuantumNous/new-api/setting/perf_metrics_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -63,6 +66,50 @@ func TestCloudflareJevNativeIntegration(t *testing.T) {
 	}
 }
 
+func TestCloudflareJevPerformanceFilterContract(t *testing.T) {
+	if os.Getenv("CLOUDFLARE_JEV_EXPECT_PERFORMANCE_FILTER") != "1" {
+		t.Skip("旧版插件继续使用原宿主兼容门禁")
+	}
+	source, err := os.ReadFile(os.Getenv("CLOUDFLARE_JEV_PLUGIN_SOURCE"))
+	require.NoError(t, err)
+	loaded, err := jsplugin.CompilePlugin(string(source), jsplugin.Options{})
+	require.NoError(t, err)
+	for _, route := range []struct {
+		method, path string
+		want         bool
+	}{
+		{http.MethodPost, "/v1/systemone", true},
+		{http.MethodPost, "/v1/task/plugins/cloudflare-jev", true},
+		{http.MethodPost, "/v1/responses", false},
+		{http.MethodPost, "/v1/chat/completions", false},
+		{http.MethodPost, "/v1/systemone/extra", false},
+		{http.MethodPost, "/v1/task/plugins/cloudflare-jev/extra", false},
+		{http.MethodGet, "/v1/systemone", false},
+	} {
+		t.Run(route.method+route.path, func(t *testing.T) {
+			for _, failure := range []map[string]any{
+				{"stage": "http", "httpStatus": 400, "errorCode": "invalid_request"},
+				{"stage": "http", "httpStatus": 401, "errorCode": "unauthorized"},
+				{"stage": "http", "httpStatus": 404, "errorCode": "not_found"},
+				{"stage": "http", "httpStatus": 429, "errorCode": "rate_limit"},
+				{"stage": "http", "httpStatus": 502, "errorCode": "bad_gateway"},
+				{"stage": "transport", "httpStatus": 502, "errorCode": "do_request_failed"},
+				{"stage": "parse", "httpStatus": 502, "errorCode": "parse_response_failed"},
+				{"stage": "immediate", "httpStatus": 502, "errorCode": "plugin_task_failed"},
+			} {
+				// 使用真实 JS 引擎调用，避免测试依赖旧宿主尚不存在的钩子类型。
+				value, callErr := loaded.Engine.Call(context.Background(), "shouldRecordPerformanceFailure", map[string]any{
+					"pluginKey": loaded.Meta.Key, "pluginVersion": loaded.Meta.Version,
+					"method": route.method, "requestPath": route.path,
+					"model": "Typesafe-jev", "upstreamModel": "typesafe/jev",
+				}, failure)
+				require.NoError(t, callErr)
+				assert.Equal(t, route.want, value, "合法路径的真实上游故障不能被错误码猜测过滤：%v", failure)
+			}
+		})
+	}
+}
+
 func testCloudflareJevNativeIntegration(t *testing.T, fixedPrice bool, clientModel string) {
 	t.Helper()
 	sourcePath := os.Getenv("CLOUDFLARE_JEV_PLUGIN_SOURCE")
@@ -79,6 +126,23 @@ func testCloudflareJevNativeIntegration(t *testing.T, fixedPrice bool, clientMod
 	require.NoError(t, err)
 	sqlDB.SetMaxOpenConns(1)
 	require.NoError(t, db.AutoMigrate(&model.Option{}, &model.TaskPlugin{}, &model.Channel{}, &model.Token{}, &model.Log{}, &model.Group{}, &model.GroupAlias{}, &model.ChannelGroupBinding{}, &model.Ability{}, &model.UserSubscription{}, &model.SubscriptionPreConsumeRecord{}, &model.PromptAuditConfig{}, &model.PromptAuditEndpoint{}, &model.RequestArchiveConfig{}, &model.RequestArchiveTarget{}, &model.PromptAuditQueueState{}, &model.RequestArchiveQueueState{}))
+	expectPerformance := os.Getenv("CLOUDFLARE_JEV_EXPECT_PERFORMANCE_FILTER") == "1"
+	if expectPerformance {
+		require.NoError(t, db.AutoMigrate(&model.PerfMetric{}))
+		oldPerformance, oldErrorLog := perf_metrics_setting.GetSetting(), constant.ErrorLogEnabled
+		require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{
+			"perf_metrics_setting.enabled": "true", "perf_metrics_setting.failure_filter_rules": "[]",
+		}))
+		constant.ErrorLogEnabled = true
+		t.Cleanup(func() {
+			constant.ErrorLogEnabled = oldErrorLog
+			oldRules, marshalErr := common.Marshal(oldPerformance.FailureFilterRules)
+			require.NoError(t, marshalErr)
+			require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{
+				"perf_metrics_setting.enabled": fmt.Sprint(oldPerformance.Enabled), "perf_metrics_setting.failure_filter_rules": string(oldRules),
+			}))
+		})
+	}
 	oldRegistry, oldLogDB := jsplugin.DefaultRegistry, model.LOG_DB
 	oldCache, oldBatch, oldLog := common.MemoryCacheEnabled, common.BatchUpdateEnabled, common.LogConsumeEnabled
 	oldQuotaPerUnit := common.QuotaPerUnit
@@ -147,6 +211,8 @@ func testCloudflareJevNativeIntegration(t *testing.T, fixedPrice bool, clientMod
 	var calls atomic.Int32
 	var responseBody atomic.Value
 	responseBody.Store(answer)
+	var responseStatus atomic.Int32
+	responseStatus.Store(http.StatusOK)
 	var balanceBeforeRequest atomic.Int64
 	balanceBeforeRequest.Store(1000000)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -168,6 +234,7 @@ func testCloudflareJevNativeIntegration(t *testing.T, fixedPrice bool, clientMod
 			assert.EqualValues(t, balanceBeforeRequest.Load()-reservedQuota, chargedToken.RemainQuota)
 		}
 		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(int(responseStatus.Load()))
 		_, _ = io.WriteString(w, responseBody.Load().(string))
 	}))
 	t.Cleanup(server.Close)
@@ -211,6 +278,33 @@ func testCloudflareJevNativeIntegration(t *testing.T, fixedPrice bool, clientMod
 	SetRelayRouter(engine)
 	engine.NoRoute(SetPluginRouter(engine), func(c *gin.Context) { c.Status(http.StatusNotFound) })
 	require.NoError(t, service.RefreshTaskPluginRoutes())
+	performanceSnapshot := func() perfmetrics.ModelSummary {
+		t.Helper()
+		if expectPerformance {
+			summary, queryErr := perfmetrics.QuerySummaryAll(24, []string{group.Code})
+			require.NoError(t, queryErr)
+			for _, metric := range summary.Models {
+				if metric.ModelName == clientModel {
+					return metric
+				}
+			}
+		}
+		return perfmetrics.ModelSummary{}
+	}
+	assertPerformanceDelta := func(before perfmetrics.ModelSummary, successes, failures int64) {
+		t.Helper()
+		if !expectPerformance {
+			return
+		}
+		after := performanceSnapshot()
+		count := before.RequestCount + successes + failures
+		assert.Equal(t, count, after.RequestCount, "模型广场样本数必须与真实上游结果一致")
+		if count > 0 {
+			priorSuccesses := math.Round(before.SuccessRate * float64(before.RequestCount) / 100)
+			wantRate := math.Round((priorSuccesses+float64(successes))/float64(count)*10000) / 100
+			assert.Equal(t, wantRate, after.SuccessRate, "错误路径不得拉低模型广场成功率")
+		}
+	}
 	send := func(method, path, key string) *httptest.ResponseRecorder {
 		request := httptest.NewRequest(method, path, strings.NewReader(currentRequest))
 		request.Header.Set("Content-Type", "application/json")
@@ -274,6 +368,42 @@ func testCloudflareJevNativeIntegration(t *testing.T, fixedPrice bool, clientMod
 			})
 		}
 	}
+	if expectPerformance {
+		t.Run("错误客户端路径保留日志但不影响模型性能", func(t *testing.T) {
+			// 原生入口隔离测试中的其他渠道不能承接本场景的聊天请求。
+			require.NoError(t, db.Model(&model.Ability{}).Where("channel_id IN ?", []int{94402, 94403}).Update("enabled", false).Error)
+			t.Cleanup(func() {
+				require.NoError(t, db.Model(&model.Ability{}).Where("channel_id IN ?", []int{94402, 94403}).Update("enabled", true).Error)
+			})
+			for _, path := range []string{"/v1/responses", "/v1/chat/completions"} {
+				beforeCalls, beforePerformance := calls.Load(), performanceSnapshot()
+				var beforeLogs int64
+				require.NoError(t, db.Model(&model.Log{}).Where("type = ?", model.LogTypeError).Count(&beforeLogs).Error)
+				response := send(http.MethodPost, path, token.Key)
+				assert.GreaterOrEqual(t, response.Code, http.StatusBadRequest, response.Body.String())
+				assert.Equal(t, beforeCalls, calls.Load(), "错误路径不能触发 Cloudflare 请求")
+				assertPerformanceDelta(beforePerformance, 0, 0)
+				var afterLogs int64
+				require.NoError(t, db.Model(&model.Log{}).Where("type = ?", model.LogTypeError).Count(&afterLogs).Error)
+				assert.Equal(t, beforeLogs+1, afterLogs, "分发错误仍应保留使用日志")
+				var failure model.Log
+				require.NoError(t, db.Where("type = ?", model.LogTypeError).Order("id DESC").First(&failure).Error)
+				assert.Equal(t, clientModel, failure.ModelName)
+				assert.Zero(t, failure.ChannelId)
+				assert.Zero(t, failure.Quota)
+				var details map[string]any
+				require.NoError(t, common.UnmarshalJsonStr(failure.Other, &details))
+				assert.Equal(t, path, details["request_path"])
+				assert.Equal(t, "distribution", details["error_stage"])
+				var actualUser model.User
+				var actualToken model.Token
+				require.NoError(t, db.First(&actualUser, user.Id).Error)
+				require.NoError(t, db.First(&actualToken, token.Id).Error)
+				assert.EqualValues(t, balanceBeforeRequest.Load(), actualUser.Quota)
+				assert.EqualValues(t, balanceBeforeRequest.Load(), actualToken.RemainQuota)
+			}
+		})
+	}
 	var successfulTasks int64
 	var totalCharged int
 	for _, tc := range []struct {
@@ -298,8 +428,10 @@ func testCloudflareJevNativeIntegration(t *testing.T, fixedPrice bool, clientMod
 			}
 			responseBody.Store(tc.body)
 			require.NoError(t, db.Model(&model.Channel{}).Where("id = ?", 94401).Update("base_url", tc.channelURL).Error)
+			beforePerformance := performanceSnapshot()
 			response := send(http.MethodPost, route, token.Key)
 			require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+			assertPerformanceDelta(beforePerformance, 1, 0)
 			assert.JSONEq(t, tc.expected, response.Body.String())
 			assert.NotContains(t, response.Body.String(), "gatewayMetadata")
 			expectedBalance := balanceBeforeRequest.Add(-int64(charge))
@@ -347,19 +479,31 @@ func testCloudflareJevNativeIntegration(t *testing.T, fixedPrice bool, clientMod
 	}
 	currentRequest = requestBody
 	expectedRequest.Store(string(expectedUpstream))
-	for _, tc := range []struct{ name, body string }{
-		{"HTTP200失败包裹", `{"success":false,"result":` + answer + `,"errors":[{"message":"PRIVATE_CLOUDFLARE_ERROR"}]}`},
-		{"缺失输入用量", strings.Replace(answer, `"input_tokens":1000,`, "", 1)},
-		{"负输入用量", strings.Replace(answer, `"input_tokens":1000`, `"input_tokens":-1`, 1)},
-		{"超出输入预算", strings.Replace(answer, `"input_tokens":1000`, `"input_tokens":32001`, 1)},
-		{"Completed缺失用量", `{"success":true,"result":{"state":"Completed","result":` + strings.Replace(answer, `"input_tokens":1000,`, "", 1) + `}}`},
-		{"未完成不能接受答案", `{"success":true,"result":{"state":"Running","result":` + answer + `}}`},
+	for _, tc := range []struct {
+		name, body string
+		status     int
+	}{
+		{"HTTP200失败包裹", `{"success":false,"result":` + answer + `,"errors":[{"message":"PRIVATE_CLOUDFLARE_ERROR"}]}`, http.StatusOK},
+		{"缺失输入用量", strings.Replace(answer, `"input_tokens":1000,`, "", 1), http.StatusOK},
+		{"负输入用量", strings.Replace(answer, `"input_tokens":1000`, `"input_tokens":-1`, 1), http.StatusOK},
+		{"超出输入预算", strings.Replace(answer, `"input_tokens":1000`, `"input_tokens":32001`, 1), http.StatusOK},
+		{"Completed缺失用量", `{"success":true,"result":{"state":"Completed","result":` + strings.Replace(answer, `"input_tokens":1000,`, "", 1) + `}}`, http.StatusOK},
+		{"未完成不能接受答案", `{"success":true,"result":{"state":"Running","result":` + answer + `}}`, http.StatusOK},
+		{"正确路径上游HTTP404不能当成客户端路径错误", `{"success":false,"errors":[{"message":"PRIVATE_CLOUDFLARE_ERROR"}]}`, http.StatusNotFound},
+		{"正确路径上游HTTP502仍影响性能", `{"success":false,"errors":[{"message":"PRIVATE_CLOUDFLARE_ERROR"}]}`, http.StatusBadGateway},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			responseBody.Store(tc.body)
+			responseStatus.Store(int32(tc.status))
 			beforeCalls := calls.Load()
+			beforePerformance := performanceSnapshot()
 			response := send(http.MethodPost, route, token.Key)
-			assert.Equal(t, http.StatusBadGateway, response.Code, response.Body.String())
+			wantStatus := tc.status
+			if wantStatus == http.StatusOK {
+				wantStatus = http.StatusBadGateway
+			}
+			assert.Equal(t, wantStatus, response.Code, response.Body.String())
+			assertPerformanceDelta(beforePerformance, 0, 1)
 			assert.NotContains(t, response.Body.String(), "PRIVATE_CLOUDFLARE_ERROR")
 			assert.Equal(t, beforeCalls+1, calls.Load(), "失败不得重试上游")
 			var actualUser model.User
