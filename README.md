@@ -9,7 +9,7 @@
 需要直连 TypeSafe 时，请在任务插件源管理中选择官方源并刷新；宿主必须升级到包含原生同步路由和用量结算能力的版本。
 `retired` 记录仅用于证明曾发布版本的不可变来源和哈希，不会被插件市场展示或安装。
 
-Cloudflare 接入使用本源的 [Cloudflare Jev 0.2.2](published/cloudflare-jev/0.2.2/README.md)，
+Cloudflare 接入使用本源的 [Cloudflare Jev 0.2.3](published/cloudflare-jev/0.2.3/README.md)，
 插件 key 为 `cloudflare-jev`、模型为 `typesafe/jev`，并支持经渠道映射的 `Typesafe-jev`；这是独立的 Cloudflare 协议适配，
 不是官方 TypeSafe 插件的重复镜像。已使用脱敏的现场成功响应做离线回放，并通过模拟上游验收；
 本轮未重复发起真实付费请求，修复版线上验收需安装激活后另行确认。
@@ -18,8 +18,9 @@ Cloudflare 接入使用本源的 [Cloudflare Jev 0.2.2](published/cloudflare-jev
 0.2.1 补齐 Cloudflare `Completed` 状态包裹解析；0.2.2 补齐 `Typesafe-jev` 别名。
 别名请求须配置 `Typesafe-jev → typesafe/jev`，权限和价格按客户端别名读取。
 大小写敏感，不支持同时声明 `typesafe-jev`，也不承诺任意自定义别名。
-升级需安装并激活 0.2.2；
-旧版仍保留供回退，不覆盖已发布源码，无需升级 `.335` 宿主。
+0.2.3 向宿主报告完整输入、输出 token 用量；升级需安装并激活 0.2.3。
+旧版仍保留供回退，不覆盖已发布源码。调用及计费兼容 `.335` 宿主，
+完整 token 日志还需要升级包含任务插件用量日志修复的宿主。
 
 ## 使用方式
 
