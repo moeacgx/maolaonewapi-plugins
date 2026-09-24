@@ -16,7 +16,7 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
-          node-version: '22'
+          node-version: "22"
       - name: Validate index and immutable releases
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
@@ -34,17 +34,25 @@ jobs:
   cloudflare-host:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - host_ref: e94fb60a4edccb729a7a1dc6e254526a5972cbc7
+            plugin_version: "0.2.3"
+          - host_ref: ca5d5ebbd8d6658704ffdf7321d88cddc74165d2
+            plugin_version: "0.2.4"
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
       - name: Set up Node
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
-          node-version: '22'
+          node-version: "22"
       - name: Check out verified host
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           repository: moeacgx/NewAPI-Mao
-          ref: e94fb60a4edccb729a7a1dc6e254526a5972cbc7
+          ref: ${{ matrix.host_ref }}
           path: host
       - name: Set up Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
@@ -54,4 +62,12 @@ jobs:
             host/go.sum
             host/relaykit/go.sum
       - name: Replay fixtures and verify host contract
+        env:
+          CLOUDFLARE_JEV_PLUGIN_VERSION: ${{ matrix.plugin_version }}
+        run: node scripts/verify-cloudflare-host.mjs host
+      - name: Old host must reject the new plugin capability
+        if: matrix.plugin_version == '0.2.3'
+        env:
+          CLOUDFLARE_JEV_PLUGIN_VERSION: "0.2.4"
+          CLOUDFLARE_JEV_EXPECT_UNSUPPORTED_CAPABILITY: "1"
         run: node scripts/verify-cloudflare-host.mjs host

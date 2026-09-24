@@ -9,7 +9,7 @@
 需要直连 TypeSafe 时，请在任务插件源管理中选择官方源并刷新；宿主必须升级到包含原生同步路由和用量结算能力的版本。
 `retired` 记录仅用于证明曾发布版本的不可变来源和哈希，不会被插件市场展示或安装。
 
-Cloudflare 接入使用本源的 [Cloudflare Jev 0.2.3](published/cloudflare-jev/0.2.3/README.md)，
+Cloudflare 接入使用本源的 [Cloudflare Jev 0.2.4](published/cloudflare-jev/0.2.4/README.md)，
 插件 key 为 `cloudflare-jev`、模型为 `typesafe/jev`，并支持经渠道映射的 `Typesafe-jev`；这是独立的 Cloudflare 协议适配，
 不是官方 TypeSafe 插件的重复镜像。已使用脱敏的现场成功响应做离线回放，并通过模拟上游验收；
 本轮未重复发起真实付费请求，修复版线上验收需安装激活后另行确认。
@@ -18,9 +18,13 @@ Cloudflare 接入使用本源的 [Cloudflare Jev 0.2.3](published/cloudflare-jev
 0.2.1 补齐 Cloudflare `Completed` 状态包裹解析；0.2.2 补齐 `Typesafe-jev` 别名。
 别名请求须配置 `Typesafe-jev → typesafe/jev`，权限和价格按客户端别名读取。
 大小写敏感，不支持同时声明 `typesafe-jev`，也不承诺任意自定义别名。
-0.2.3 向宿主报告完整输入、输出 token 用量；升级需安装并激活 0.2.3。
-旧版仍保留供回退，不覆盖已发布源码。调用及计费兼容 `.335` 宿主，
-完整 token 日志还需要升级包含任务插件用量日志修复的宿主。
+0.2.3 向宿主报告完整输入、输出 token 用量；0.2.4 增加通用性能失败过滤钩子，日志继续保留。
+**0.2.4 需要先升级到包含 NewAPI-Mao PR #276 的宿主（能力 `task-performance-filter@1`）。
+已发布 .337 及更早版本暂用 0.2.3，不能直接安装 0.2.4；旧宿主会明确拒绝此能力。**
+错误客户端路径在主程序首次选渠时结束，本来不进入性能采样；插件不会接管 /v1/responses。
+合法入口上的真实 Cloudflare 故障继续由宿主统计，不按所有 400/404/503 一刀切过滤。
+旧版保留供回退，不覆盖已发布源码。0.2.3 调用及计费兼容 `.335`，
+完整 token 日志仍需包含任务用量日志修复的宿主。
 
 ## 使用方式
 
@@ -80,5 +84,7 @@ node scripts/validate-index.mjs
 ```
 
 宿主验证使用 Go overlay 叠加测试，不修改宿主工作区；fixture 同时由 Node 和宿主 JS 引擎执行。
-CI 固定 `.335` 发布提交验证兼容性，不能用未来宿主的新功能掩盖已部署版本的缺口。
+CI 分别固定 `.335` 发布提交验证 0.2.3 兼容、新钩子合并提交验证 0.2.4，
+并断言旧宿主明确拒绝 0.2.4。本地可用 `CLOUDFLARE_JEV_PLUGIN_VERSION=0.2.3` 选择旧版验收。
+不能用未来宿主的新功能掩盖已部署版本的缺口。
 旧宿主索引生成器会忽略本源的 `retired` 扩展，更新索引时必须保留这些退役记录，禁止覆盖丢失。

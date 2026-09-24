@@ -2,13 +2,20 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { fixture } from "./cloudflare-jev-cases.mjs";
+import { performanceFixture } from "./cloudflare-jev-performance-cases.mjs";
 
 const bytes = await readFile(
-  new URL("../published/cloudflare-jev/0.2.3/plugin.js", import.meta.url),
+  new URL("../published/cloudflare-jev/0.2.4/plugin.js", import.meta.url),
 );
 const plugin = await import(
   "data:text/javascript;base64," + bytes.toString("base64")
 );
+test("性能钩子声明宿主能力", () => {
+  assert.equal(plugin.meta.version, "0.2.4");
+  assert.deepEqual(plugin.meta.requiredCapabilities, [
+    "task-performance-filter@1",
+  ]);
+});
 test("宿主能够按声明接收完整 token 用量事实", () => {
   const usage = { input_tokens: 486, output_tokens: 70 };
   const facts = plugin.extractUsageOnComplete({}, {}, { usage });
@@ -52,7 +59,7 @@ test("客户端统一入口仍由插件转换为 Cloudflare 私有请求", () =>
     },
   });
 });
-for (const entry of fixture.cases) {
+for (const entry of [...fixture.cases, ...performanceFixture.cases]) {
   test(entry.name, () => {
     const invoke = () =>
       (entry.member ? plugin[entry.hook][entry.member] : plugin[entry.hook])(
