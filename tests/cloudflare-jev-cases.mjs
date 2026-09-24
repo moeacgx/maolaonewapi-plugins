@@ -212,10 +212,10 @@ for (const [name, body] of [
   );
 }
 good(
-  "现场Completed用量按486输入结算",
+  "现场Completed保留输入输出实际用量",
   "extractUsageOnComplete",
   [{}, {}, completedEnvelope.result.result],
-  { input_tokens: 486 },
+  { input_tokens: 486, output_tokens: 70 },
 );
 good(
   "Completed包裹保留显式零值",
@@ -454,9 +454,15 @@ good(
   [{ ...context, usagePurpose: "billing_ratios" }],
   null,
 );
-good("实际输入结算输出不收费", "extractUsageOnComplete", [{}, {}, response], {
-  input_tokens: 1000,
-});
+good(
+  "完成用量保留输入与输出供宿主记录",
+  "extractUsageOnComplete",
+  [{}, {}, response],
+  {
+    input_tokens: 1000,
+    output_tokens: 73,
+  },
+);
 for (const count of [0, 32000]) {
   const body = {
     ...response,
@@ -473,6 +479,7 @@ for (const count of [0, 32000]) {
   );
   good(`结算输入边界${count}`, "extractUsageOnComplete", [{}, {}, body], {
     input_tokens: count,
+    output_tokens: 0,
   });
 }
 for (const url of [
@@ -746,6 +753,35 @@ responseError(
   (b) => {
     delete b.usage.output_tokens;
   },
+  "用量",
+);
+const maxOutputBody = {
+  ...response,
+  usage: { input_tokens: 1000, output_tokens: 2147483647 },
+};
+good(
+  "输出用量保留数据库整数上界",
+  "parseSubmitResponse",
+  [context, { statusCode: 200, body: maxOutputBody }],
+  { ...success, taskData: maxOutputBody },
+);
+good(
+  "完成用量保留数据库整数上界",
+  "extractUsageOnComplete",
+  [{}, {}, maxOutputBody],
+  maxOutputBody.usage,
+);
+responseError(
+  "输出用量超数据库整数上界",
+  (b) => {
+    b.usage.output_tokens = 2147483648;
+  },
+  "用量",
+);
+bad(
+  "完成用量拒绝超数据库整数上界",
+  "extractUsageOnComplete",
+  [{}, {}, { usage: { input_tokens: 1000, output_tokens: 2147483648 } }],
   "用量",
 );
 responseError(

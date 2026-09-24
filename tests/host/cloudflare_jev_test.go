@@ -84,7 +84,7 @@ func testCloudflareJevNativeIntegration(t *testing.T, fixedPrice bool, clientMod
 	oldQuotaPerUnit := common.QuotaPerUnit
 	jsplugin.DefaultRegistry = jsplugin.NewRegistry()
 	model.LOG_DB = db
-	common.MemoryCacheEnabled, common.BatchUpdateEnabled, common.LogConsumeEnabled = false, false, false
+	common.MemoryCacheEnabled, common.BatchUpdateEnabled, common.LogConsumeEnabled = false, false, true
 	common.QuotaPerUnit = 500000
 	t.Cleanup(func() {
 		jsplugin.DefaultRegistry = oldRegistry
@@ -312,6 +312,21 @@ func testCloudflareJevNativeIntegration(t *testing.T, fixedPrice bool, clientMod
 			assert.EqualValues(t, expectedBalance, actualUser.Quota)
 			assert.EqualValues(t, expectedBalance, actualToken.RemainQuota)
 			assert.Equal(t, totalCharged, actualToken.UsedQuota)
+			var consume model.Log
+			require.NoError(t, db.Where("type = ?", model.LogTypeConsume).Order("id DESC").First(&consume).Error)
+			assert.Equal(t, charge, consume.Quota)
+			// .335 仍作调用和计费兼容门禁；修复后的宿主额外验收 Token 落库。
+			if os.Getenv("CLOUDFLARE_JEV_EXPECT_TOKEN_LOGS") == "1" {
+				var expected struct {
+					Usage struct {
+						Input  int `json:"input_tokens"`
+						Output int `json:"output_tokens"`
+					} `json:"usage"`
+				}
+				require.NoError(t, common.Unmarshal([]byte(tc.expected), &expected))
+				assert.Equal(t, expected.Usage.Input, consume.PromptTokens)
+				assert.Equal(t, expected.Usage.Output, consume.CompletionTokens)
+			}
 			var task model.Task
 			require.NoError(t, db.Order("id DESC").First(&task).Error)
 			assert.Equal(t, 94401, task.ChannelId)

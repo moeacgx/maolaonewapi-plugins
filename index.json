@@ -10,8 +10,15 @@
         "zh": "通过 Cloudflare 调用 Jev 决策模型，需配置包含账户 ID 的 API 地址和令牌"
       },
       "models": ["typesafe/jev", "Typesafe-jev"],
-      "latest": "0.2.2",
+      "latest": "0.2.3",
       "versions": [
+        {
+          "version": "0.2.3",
+          "path": "published/cloudflare-jev/0.2.3/plugin.js",
+          "sha256": "fbb6beadfea0f4d6573abdb654ba61ae22a03465f004111b535da5b5ca8da311",
+          "kind": "task",
+          "minApiVersion": 1
+        },
         {
           "version": "0.2.2",
           "path": "published/cloudflare-jev/0.2.2/plugin.js",
